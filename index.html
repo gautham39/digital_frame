@@ -73,11 +73,10 @@
     const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
     const CHAR_UUID    = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
 
-    // --- PARAMS ---
-    const SATURATION_BOOST = 1.25;
-    const CONTRAST_BOOST   = 1.20;
-    const SHARPEN_MIX      = 0.20;
-    const ERROR_DAMPING    = 0.90; // NEW: Reduces "snow" noise by 10%
+    // --- PORTRAIT OPTIMIZED PARAMS ---
+    const SATURATION_BOOST = 1.3; // Slightly less saturated for natural skin
+    const CONTRAST_BOOST   = 1.3; // Lower contrast to avoid "crater" wrinkles
+    const SHARPEN_MIX      = 0.15; // Softer sharpening for skin
 
     // --- STATE ---
     let canvasWidth = 800;
@@ -218,11 +217,11 @@
         let imgData = hwCtx.getImageData(0, 0, 800, 480);
         imgData = applyAdjustments(imgData);
         imgData = applySharpen(imgData);
-        const result = applyDithering(imgData); // Dither with Neon Guard
+        const result = applyPortraitDithering(imgData); // NEW Human-Centric Dither
         
         finalBytes = result.bytes;
         if (device && device.gatt.connected) document.getElementById('btnUpload').disabled = false;
-        log(`Ready: ${(finalBytes.length/1024).toFixed(1)} KB (Neon Fix)`);
+        log(`Ready: ${(finalBytes.length/1024).toFixed(1)} KB (Portrait Mode)`);
     }
 
     function applyAdjustments(imgData) {
@@ -260,8 +259,8 @@
         return new ImageData(out, w, h);
     }
 
-    // --- UPDATED DITHER: NEON GUARD + DAMPING ---
-    function applyDithering(imgData) {
+    // --- HUMAN-CENTRIC DITHERING ---
+    function applyPortraitDithering(imgData) {
         const w = 800, h = 480;
         const outBytes = new Uint8Array(w * h);
         const buffer = new Float32Array(imgData.data); 
@@ -271,27 +270,38 @@
             for (let x=0; x<w; x++) {
                 const i = (y*w + x)*4;
                 const oldR = buffer[i], oldG = buffer[i+1], oldB = buffer[i+2];
-                let bestIdx=0, minDist=Infinity;
-                for (let p=0; p<PALETTE.length; p++) {
-                    const dist = Math.sqrt((oldR-PALETTE[p][0])**2 + (oldG-PALETTE[p][1])**2 + (oldB-PALETTE[p][2])**2);
-                    if (dist < minDist) { minDist = dist; bestIdx = p; }
-                }
+
+                // --- SKIN DETECTION ---
+                // Heuristic: Skin is Red-dominant, G is roughly 0.5~0.8 of R, B is low.
+                // Works for light to dark skin tones generally.
+                const isSkin = (oldR > 60) && (oldG > 40) && (oldB > 20) &&
+                               (oldR > oldG) && (oldR > oldB) &&
+                               (oldR - oldG > 10) && (Math.abs(oldR - oldG) < 150);
+
+                let bestIdx = 0, minDist = Infinity;
                 
-                // --- NEON GUARD ---
-                // If it's pure Red, DO NOT mix in White.
-                if (bestIdx === 4) { // 4 is Red
-                    // Force solid red, kill error? No, just keep it red.
-                    // This prevents "Pink" conversion which adds white dots.
+                for (let p=0; p<PALETTE.length; p++) {
+                    let dist = Math.sqrt((oldR-PALETTE[p][0])**2 + (oldG-PALETTE[p][1])**2 + (oldB-PALETTE[p][2])**2);
+                    
+                    // --- SKIN PROTECTION LOGIC ---
+                    if (isSkin) {
+                        // PENALIZE Green (2) and Blue (3) on faces
+                        if (p === 2 || p === 3) dist *= 5.0; 
+                        
+                        // BONUS for Warm Colors (White, Yellow, Red, Orange)
+                        if (p === 1 || p === 4 || p === 5 || p === 6) dist *= 0.8;
+                    }
+
+                    if (dist < minDist) { minDist = dist; bestIdx = p; }
                 }
 
                 const newR = PALETTE[bestIdx][0], newG = PALETTE[bestIdx][1], newB = PALETTE[bestIdx][2];
                 outBytes[y*w + x] = bestIdx;
                 
-                // --- ERROR DAMPING ---
-                // Multiply error by 0.9 to stop "snow" (White dots) from spreading
-                const errR = (oldR - newR) * ERROR_DAMPING;
-                const errG = (oldG - newG) * ERROR_DAMPING;
-                const errB = (oldB - newB) * ERROR_DAMPING;
+                // Damping (0.9) to reduce noise
+                const errR = (oldR - newR) * 0.9;
+                const errG = (oldG - newG) * 0.9;
+                const errB = (oldB - newB) * 0.9;
 
                 const push = (dx, dy, f) => {
                     const ni = ((y+dy)*w + (x+dx))*4;
