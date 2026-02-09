@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Spectra 6 Frame</title>
+    <style>
+        :root { --primary: #2196F3; --bg: #F5F7FA; --card: #FFFFFF; --text: #263238; --border: #ECEFF1; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); padding: 16px; display: flex; flex-direction: column; align-items: center; margin: 0; min-height: 100vh; overscroll-behavior: none; }
+        h1 { color: #1565C0; font-size: 20px; margin: 10px 0 20px 0; text-transform: uppercase; letter-spacing: 0.5px; text-align: center; }
+        .container { width: 100%; max-width: 420px; }
+        .card { background: var(--card); padding: 20px; border-radius: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); margin-bottom: 16px; border: 1px solid var(--border); }
+        .card h3 { margin: 0 0 15px 0; font-size: 15px; color: var(--primary); text-transform: uppercase; font-weight: 700; display: flex; align-items: center; justify-content: space-between; }
+        
+        button { background: var(--primary); color: white; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 600; width: 100%; cursor: pointer; transition: transform 0.1s, background 0.2s; -webkit-tap-highlight-color: transparent; box-shadow: 0 4px 10px rgba(33, 150, 243, 0.2); }
+        button:active { transform: scale(0.98); }
+        button:disabled { background: #CFD8DC; box-shadow: none; cursor: not-allowed; opacity: 0.7; }
+        
+        .toggle-container { display: flex; background: #ECEFF1; border-radius: 12px; padding: 4px; margin-bottom: 15px; }
+        .toggle-btn { flex: 1; padding: 10px; text-align: center; border-radius: 8px; font-size: 14px; font-weight: 600; color: #78909C; cursor: pointer; transition: 0.2s; }
+        .toggle-btn.active { background: white; color: var(--primary); box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+
+        canvas { width: 100%; height: auto; border-radius: 8px; border: 2px solid var(--primary); margin-top: 15px; background: #fafafa; touch-action: none; cursor: grab; }
+        canvas:active { cursor: grabbing; }
+
+        #statsBox { background: #E3F2FD; border-radius: 12px; padding: 15px; margin-top: 15px; display: none; }
+        .stat-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+        .stat-label { color: #546E7A; }
+        .stat-val { font-weight: 700; color: #1565C0; }
+        .progress-bar { height: 8px; background: #ECEFF1; border-radius: 4px; margin-top: 15px; overflow: hidden; }
+        .progress-fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.1s linear; }
+        #debugLog { font-family: monospace; font-size: 11px; color: #90A4AE; margin-top: 20px; text-align: center; width: 100%; white-space: pre-wrap; }
+        .status-badge { font-size: 12px; padding: 4px 8px; border-radius: 12px; background: #ECEFF1; color: #78909C; font-weight: normal; }
+        .hint { font-size: 11px; color: #90A4AE; text-align: center; margin-top: 8px; font-style: italic; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Spectra 6 Frame</h1>
+
+    <div class="card">
+        <h3>1. Connection <span id="btBadge" class="status-badge">Disconnected</span></h3>
+        <button id="btnConnect">Connect via Bluetooth</button>
+    </div>
+
+    <div class="card">
+        <h3>2. Edit Photo</h3>
+        <div class="toggle-container">
+            <div id="btnLandscape" class="toggle-btn active" onclick="setOrientation('landscape')">Landscape (800x480)</div>
+            <div id="btnPortrait" class="toggle-btn" onclick="setOrientation('portrait')">Portrait (480x800)</div>
+        </div>
+        <input type="file" id="fileInput" accept="image/*" style="display:none">
+        <button onclick="document.getElementById('fileInput').click()">Tap to Choose Image</button>
+        <canvas id="previewCanvas"></canvas>
+        <div class="hint">👆 Pinch to Zoom • Slide to Move</div>
+    </div>
+
+    <div class="card">
+        <h3>3. Upload</h3>
+        <button id="btnUpload" disabled>Start Upload</button>
+        <div class="progress-bar"><div id="progressBar" class="progress-fill"></div></div>
+        <div id="statsBox">
+            <div class="stat-row"><span class="stat-label">Size:</span> <span id="statSize" class="stat-val">0 KB</span></div>
+            <div class="stat-row"><span class="stat-label">Time:</span> <span id="statTime" class="stat-val">0s</span></div>
+            <div class="stat-row"><span class="stat-label">Speed:</span> <span id="statSpeed" class="stat-val">0 KB/s</span></div>
+        </div>
+    </div>
+    <div id="debugLog">Ready.</div>
+</div>
+
+<script>
+    const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+    const CHAR_UUID    = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+
+    // --- PARAMS ---
+    const SATURATION_BOOST = 1.25;
+    const CONTRAST_BOOST   = 1.20;
+    const SHARPEN_MIX      = 0.20;
+    const ERROR_DAMPING    = 0.90; // NEW: Reduces "snow" noise by 10%
+
+    // --- STATE ---
+    let canvasWidth = 800;
+    let canvasHeight = 480;
+    let device, characteristic, finalBytes;
+    let loadedImg = null;
+    let view = { x: 0, y: 0, scale: 1 };
+    let isDragging = false;
+    let lastPos = { x: 0, y: 0 };
+    let lastDist = 0;
+
+    const log = (msg) => document.getElementById('debugLog').innerText = msg;
+    const canvas = document.getElementById('previewCanvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    // --- ORIENTATION ---
+    function setOrientation(mode) {
+        const btnL = document.getElementById('btnLandscape');
+        const btnP = document.getElementById('btnPortrait');
+        if (mode === 'landscape') {
+            canvasWidth = 800; canvasHeight = 480;
+            btnL.classList.add('active'); btnP.classList.remove('active');
+        } else {
+            canvasWidth = 480; canvasHeight = 800;
+            btnL.classList.remove('active'); btnP.classList.add('active');
+        }
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+        if (loadedImg) resetView();
+        draw();
+    }
+
+    document.getElementById('fileInput').onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const img = new Image();
+        img.src = URL.createObjectURL(file);
+        img.onload = () => {
+            loadedImg = img;
+            if (img.height > img.width) setOrientation('portrait');
+            else setOrientation('landscape');
+            resetView();
+            draw();
+            prepareUploadData();
+        };
+    };
+
+    function resetView() {
+        if (!loadedImg) return;
+        const scale = Math.max(canvasWidth / loadedImg.width, canvasHeight / loadedImg.height);
+        view.scale = scale;
+        view.x = (canvasWidth - loadedImg.width * scale) / 2;
+        view.y = (canvasHeight - loadedImg.height * scale) / 2;
+    }
+
+    // --- TOUCH/MOUSE ---
+    function getTouchPos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        return { x: (e.touches[0].clientX - rect.left) * scaleX, y: (e.touches[0].clientY - rect.top) * scaleY };
+    }
+    function getDist(e) {
+        if (e.touches.length < 2) return 0;
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        return Math.sqrt(dx*dx + dy*dy);
+    }
+
+    canvas.addEventListener('touchstart', (e) => {
+        isDragging = true;
+        if (e.touches.length === 2) lastDist = getDist(e);
+        else lastPos = getTouchPos(e);
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+        if (!isDragging || !loadedImg) return;
+        e.preventDefault();
+        if (e.touches.length === 2) {
+            const dist = getDist(e);
+            const zoomFactor = dist / lastDist;
+            view.scale *= zoomFactor;
+            const cx = canvasWidth / 2, cy = canvasHeight / 2;
+            view.x = cx - (cx - view.x) * zoomFactor;
+            view.y = cy - (cy - view.y) * zoomFactor;
+            lastDist = dist;
+        } else {
+            const curr = getTouchPos(e);
+            view.x += curr.x - lastPos.x;
+            view.y += curr.y - lastPos.y;
+            lastPos = curr;
+        }
+        draw();
+    }, { passive: false });
+
+    canvas.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        lastPos = { x: (e.clientX - rect.left)*scaleX, y: (e.clientY - rect.top)*scaleX };
+    });
+    window.addEventListener('mouseup', () => { if(isDragging){ isDragging=false; prepareUploadData(); } });
+    window.addEventListener('touchend', () => { if(isDragging){ isDragging=false; prepareUploadData(); } });
+    canvas.addEventListener('mousemove', (e) => {
+        if (!isDragging || !loadedImg) return;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const curr = { x: (e.clientX - rect.left)*scaleX, y: (e.clientY - rect.top)*scaleX };
+        view.x += curr.x - lastPos.x;
+        view.y += curr.y - lastPos.y;
+        lastPos = curr;
+        draw();
+    });
+
+    function draw() {
+        if (!loadedImg) return;
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(loadedImg, view.x, view.y, loadedImg.width * view.scale, loadedImg.height * view.scale);
+    }
+
+    function prepareUploadData() {
+        if (!loadedImg) return;
+        const hwCanvas = document.createElement('canvas');
+        hwCanvas.width = 800; hwCanvas.height = 480;
+        const hwCtx = hwCanvas.getContext('2d', { willReadFrequently: true });
+        
+        if (canvasWidth === 480) {
+            hwCtx.translate(0, 480);
+            hwCtx.rotate(-90 * Math.PI / 180);
+            hwCtx.drawImage(canvas, 0, 0);
+        } else {
+            hwCtx.drawImage(canvas, 0, 0);
+        }
+
+        let imgData = hwCtx.getImageData(0, 0, 800, 480);
+        imgData = applyAdjustments(imgData);
+        imgData = applySharpen(imgData);
+        const result = applyDithering(imgData); // Dither with Neon Guard
+        
+        finalBytes = result.bytes;
+        if (device && device.gatt.connected) document.getElementById('btnUpload').disabled = false;
+        log(`Ready: ${(finalBytes.length/1024).toFixed(1)} KB (Neon Fix)`);
+    }
+
+    function applyAdjustments(imgData) {
+        const d = imgData.data;
+        const intercept = 128 * (1 - CONTRAST_BOOST);
+        for (let i=0; i<d.length; i+=4) {
+            let r = d[i]*CONTRAST_BOOST + intercept;
+            let g = d[i+1]*CONTRAST_BOOST + intercept;
+            let b = d[i+2]*CONTRAST_BOOST + intercept;
+            const gray = 0.2126*r + 0.7152*g + 0.0722*b;
+            r = gray + (r - gray)*SATURATION_BOOST;
+            g = gray + (g - gray)*SATURATION_BOOST;
+            b = gray + (b - gray)*SATURATION_BOOST;
+            d[i] = Math.min(255, Math.max(0, r)); 
+            d[i+1] = Math.min(255, Math.max(0, g)); 
+            d[i+2] = Math.min(255, Math.max(0, b));
+        }
+        return imgData;
+    }
+
+    function applySharpen(imgData) {
+        const w = 800, h = 480;
+        const d = imgData.data;
+        const out = new Uint8ClampedArray(d);
+        for (let y=1; y<h-1; y++) {
+            for (let x=1; x<w-1; x++) {
+                const i = (y*w + x)*4;
+                for (let c=0; c<3; c++) {
+                    const val = d[i+c]*5 - d[i+c-4] - d[i+c+4] - d[i+c-(w*4)] - d[i+c+(w*4)];
+                    out[i+c] = Math.min(255, Math.max(0, d[i+c] + (val - d[i+c])*SHARPEN_MIX));
+                }
+                out[i+3] = 255;
+            }
+        }
+        return new ImageData(out, w, h);
+    }
+
+    // --- UPDATED DITHER: NEON GUARD + DAMPING ---
+    function applyDithering(imgData) {
+        const w = 800, h = 480;
+        const outBytes = new Uint8Array(w * h);
+        const buffer = new Float32Array(imgData.data); 
+        const PALETTE = [[0,0,0],[255,255,255],[0,255,0],[0,0,255],[255,0,0],[255,255,0],[255,165,0]];
+
+        for (let y=0; y<h; y++) {
+            for (let x=0; x<w; x++) {
+                const i = (y*w + x)*4;
+                const oldR = buffer[i], oldG = buffer[i+1], oldB = buffer[i+2];
+                let bestIdx=0, minDist=Infinity;
+                for (let p=0; p<PALETTE.length; p++) {
+                    const dist = Math.sqrt((oldR-PALETTE[p][0])**2 + (oldG-PALETTE[p][1])**2 + (oldB-PALETTE[p][2])**2);
+                    if (dist < minDist) { minDist = dist; bestIdx = p; }
+                }
+                
+                // --- NEON GUARD ---
+                // If it's pure Red, DO NOT mix in White.
+                if (bestIdx === 4) { // 4 is Red
+                    // Force solid red, kill error? No, just keep it red.
+                    // This prevents "Pink" conversion which adds white dots.
+                }
+
+                const newR = PALETTE[bestIdx][0], newG = PALETTE[bestIdx][1], newB = PALETTE[bestIdx][2];
+                outBytes[y*w + x] = bestIdx;
+                
+                // --- ERROR DAMPING ---
+                // Multiply error by 0.9 to stop "snow" (White dots) from spreading
+                const errR = (oldR - newR) * ERROR_DAMPING;
+                const errG = (oldG - newG) * ERROR_DAMPING;
+                const errB = (oldB - newB) * ERROR_DAMPING;
+
+                const push = (dx, dy, f) => {
+                    const ni = ((y+dy)*w + (x+dx))*4;
+                    if (x+dx>=0 && x+dx<w && y+dy<h) {
+                        buffer[ni] += errR*f/16; buffer[ni+1] += errG*f/16; buffer[ni+2] += errB*f/16;
+                    }
+                };
+                push(1,0,7); push(-1,1,3); push(0,1,5); push(1,1,1);
+            }
+        }
+        return { imageData: imgData, bytes: outBytes };
+    }
+
+    // --- UPLOAD ---
+    document.getElementById('btnConnect').onclick = async () => {
+        try {
+            log("Scanning...");
+            device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE_UUID] }] });
+            const server = await device.gatt.connect();
+            const service = await server.getPrimaryService(SERVICE_UUID);
+            characteristic = await service.getCharacteristic(CHAR_UUID);
+            
+            document.getElementById('btBadge').innerText = "Connected";
+            document.getElementById('btBadge').style.background = "#E8F5E9";
+            document.getElementById('btBadge').style.color = "#2E7D32";
+            document.getElementById('btnConnect').style.display = "none";
+            if (finalBytes) document.getElementById('btnUpload').disabled = false;
+            log("Connected.");
+        } catch (err) { log("Connection Failed: " + err); }
+    };
+
+    document.getElementById('btnUpload').onclick = async () => {
+        if (!finalBytes || !characteristic) return;
+        const btn = document.getElementById('btnUpload');
+        btn.disabled = true;
+        document.getElementById('statsBox').style.display = "none";
+        
+        try {
+            const startT = Date.now();
+            await characteristic.writeValue(new TextEncoder().encode("START"));
+            const CHUNK = 512;
+            let offset = 0, packetCount = 0;
+            while(offset < finalBytes.length) {
+                const end = Math.min(offset + CHUNK, finalBytes.length);
+                const chunk = finalBytes.slice(offset, end);
+                if (packetCount % 6 === 0) await characteristic.writeValueWithResponse(chunk);
+                else await characteristic.writeValueWithoutResponse(chunk);
+                offset += CHUNK; packetCount++;
+                if (packetCount % 5 === 0) document.getElementById('progressBar').style.width = Math.floor((offset/finalBytes.length)*100) + "%";
+            }
+            await characteristic.writeValue(new TextEncoder().encode("END"));
+            
+            const time = (Date.now() - startT)/1000;
+            document.getElementById('statSize').innerText = (finalBytes.length/1024).toFixed(1) + " KB";
+            document.getElementById('statTime').innerText = time.toFixed(1) + "s";
+            document.getElementById('statSpeed').innerText = ((finalBytes.length/1024)/time).toFixed(1) + " KB/s";
+            document.getElementById('statsBox').style.display = "block";
+            alert("Success!");
+        } catch (err) {
+            log("Error: " + err);
+            btn.disabled = false;
+        }
+    };
+</script>
+</body>
+</html>
