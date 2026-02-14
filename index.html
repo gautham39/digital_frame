@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Spectra 6 Frame</title>
+    <script type="importmap">
+      { "imports": { "@google/generative-ai": "https://esm.run/@google/generative-ai" } }
+    </script>
+    <style>
+        :root { --primary: #2196F3; --bg: #F5F7FA; --card: #FFFFFF; --text: #263238; }
+        body { font-family: -apple-system, sans-serif; background: var(--bg); color: var(--text); padding: 16px; margin: 0; padding-bottom: 120px; touch-action: none; }
+        
+        h1 { font-size: 20px; margin: 0 0 15px 0; text-align: center; color: #1565C0; text-transform: uppercase; }
+        
+        /* Card Style */
+        .card { background: var(--card); padding: 20px; border-radius: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); margin-bottom: 16px; transition: opacity 0.3s; }
+        .card h3 { margin: 0 0 15px 0; font-size: 14px; color: #90A4AE; text-transform: uppercase; font-weight: 700; }
+
+        /* UI States */
+        .step-disabled { opacity: 0.5; pointer-events: none; filter: grayscale(1); }
+        .step-active { opacity: 1; pointer-events: auto; filter: grayscale(0); }
+
+        /* Preview Canvas */
+        .canvas-container {
+            width: 100%; height: 260px; background: #fafafa; border-radius: 8px;
+            overflow: hidden; position: relative; margin-top: 15px; border: 2px solid var(--primary);
+        }
+        canvas { width: 100%; height: 100%; object-fit: contain; touch-action: none; }
+
+        /* Buttons */
+        .toggle-container { display: flex; gap: 10px; margin-bottom: 15px; }
+        .toggle-btn { flex: 1; padding: 12px; text-align: center; border-radius: 8px; font-size: 14px; font-weight: 600; color: #78909C; background: #ECEFF1; cursor: pointer; transition: 0.2s; }
+        .toggle-btn.active { background: var(--primary); color: white; box-shadow: 0 4px 8px rgba(33, 150, 243, 0.3); }
+
+        button { background: var(--primary); color: white; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 600; width: 100%; cursor: pointer; margin-top: 10px; }
+        button.secondary { background: #546E7A; margin-top: 0; }
+        button:disabled { background: #CFD8DC; cursor: not-allowed; }
+
+        /* Stats Overlay */
+        #statsBox { 
+            position: fixed; bottom: 20px; left: 16px; right: 16px; 
+            background: #E3F2FD; border-radius: 12px; padding: 15px; 
+            display: none; z-index: 1000; box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        .stat-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+        .stat-label { color: #546E7A; }
+        .stat-val { font-weight: 700; color: #1565C0; }
+        .progress-bar { height: 8px; background: #BBDEFB; border-radius: 4px; margin-top: 10px; overflow: hidden; }
+        .progress-fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.1s linear; }
+
+        .hint { font-size: 11px; color: #90A4AE; text-align: center; margin-top: 8px; font-style: italic; }
+        #apiKey { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 15px; display: none; }
+    </style>
+</head>
+<body>
+
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h1>Spectra 6 Frame</h1>
+        <button style="width:auto; padding:8px; margin:0; background:none; color:#999;" onclick="const s=document.getElementById('apiKey'); s.style.display=s.style.display==='block'?'none':'block'">⚙️</button>
+    </div>
+    <input type="password" id="apiKey" placeholder="AIzaSyCHNlNgWHrNv-HOSd0890mA8l8R5voorMM">
+
+    <div class="card" id="cardConnect">
+        <h3>1. Connection</h3>
+        <button id="btnConnect">Connect via Bluetooth</button>
+    </div>
+
+    <div class="card step-disabled" id="cardCompose">
+        <h3>2. Edit Photo</h3>
+        
+        <div class="toggle-container">
+            <div id="btnLandscape" class="toggle-btn active" onclick="setOrientation('landscape')">Horizontal</div>
+            <div id="btnPortrait" class="toggle-btn" onclick="setOrientation('portrait')">Vertical</div>
+        </div>
+
+        <button onclick="document.getElementById('fileInput').click()">Tap to Choose Image</button>
+        <input type="file" id="fileInput" accept="image/*" style="display:none">
+        
+        <div class="canvas-container">
+            <canvas id="previewCanvas"></canvas>
+        </div>
+        
+        <div style="display:flex; gap:10px; margin-top:10px;">
+            <button class="secondary" onclick="rotateImage(90)">⟳ Rotate 90°</button>
+        </div>
+        
+        <div class="hint">👆 Pinch to Zoom • Drag to Move • Rotate if needed</div>
+    </div>
+
+    <div class="card step-disabled" id="cardUpload">
+        <h3>3. Upload</h3>
+        <button id="btnUpload" disabled>Start Upload</button>
+    </div>
+
+    <div id="statsBox">
+        <div class="stat-row"><span class="stat-label">Status:</span> <span id="statusText" class="stat-val">Ready</span></div>
+        <div class="progress-bar"><div id="progressBar" class="progress-fill"></div></div>
+        <div style="margin-top:10px; padding-top:10px; border-top:1px solid #BBDEFB;">
+            <div class="stat-row"><span class="stat-label">Size:</span> <span id="statSize" class="stat-val">0 KB</span></div>
+            <div class="stat-row"><span class="stat-label">Speed:</span> <span id="statSpeed" class="stat-val">0 KB/s</span></div>
+            <div class="stat-row"><span class="stat-label">Time Left:</span> <span id="statTime" class="stat-val">--</span></div>
+        </div>
+    </div>
+
+<script type="module">
+    import { GoogleGenerativeAI } from "@google/generative-ai";
+
+    const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+    const CHAR_UUID    = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+
+    let device, char;
+    let canvasWidth = 800, canvasHeight = 480;
+    let loadedImg = null;
+    let view = { x: 0, y: 0, scale: 1, rotation: 0 };
+    let isDragging = false, lastPos = { x: 0, y: 0 }, lastDist = 0;
+    
+    const canvas = document.getElementById('previewCanvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    // --- CONNECTION ---
+    document.getElementById('btnConnect').onclick = async () => {
+        try {
+            device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE_UUID] }] });
+            document.getElementById('btnConnect').innerText = "⌛ Connecting...";
+            
+            device.addEventListener('gattserverdisconnected', onDisconnected);
+            const server = await device.gatt.connect();
+            const service = await server.getPrimaryService(SERVICE_UUID);
+            char = await service.getCharacteristic(CHAR_UUID);
+            
+            document.getElementById('cardCompose').classList.remove('step-disabled');
+            document.getElementById('cardCompose').classList.add('step-active');
+            const btn = document.getElementById('btnConnect');
+            btn.innerText = "✅ Connected";
+            btn.style.background = "#4CAF50";
+            btn.disabled = true;
+        } catch(e) { alert(e); resetUI(); }
+    };
+
+    function onDisconnected() {
+        alert("Upload Complete! Device is restarting.");
+        resetUI();
+    }
+
+    function resetUI() {
+        const btn = document.getElementById('btnConnect');
+        btn.innerText = "Connect via Bluetooth";
+        btn.style.background = "#2196F3";
+        btn.disabled = false;
+        document.getElementById('cardCompose').classList.add('step-disabled');
+        document.getElementById('cardCompose').classList.remove('step-active');
+        document.getElementById('cardUpload').classList.add('step-disabled');
+        document.getElementById('cardUpload').classList.remove('step-active');
+        document.getElementById('statsBox').style.display = "none";
+        device = null; char = null;
+    }
+
+    // --- PREVIEW ---
+    window.setOrientation = (mode) => {
+        const btnL = document.getElementById('btnLandscape');
+        const btnP = document.getElementById('btnPortrait');
+        if (mode === 'landscape') {
+            canvasWidth = 800; canvasHeight = 480;
+            btnL.classList.add('active'); btnP.classList.remove('active');
+        } else {
+            canvasWidth = 480; canvasHeight = 800;
+            btnL.classList.remove('active'); btnP.classList.add('active');
+        }
+        canvas.width = canvasWidth; canvas.height = canvasHeight;
+        if (loadedImg) resetView();
+        draw();
+    };
+
+    window.rotateImage = (deg) => {
+        view.rotation = (view.rotation + deg) % 360;
+        draw();
+    };
+
+    document.getElementById('fileInput').onchange = (e) => {
+        const file = e.target.files[0]; if (!file) return;
+        const img = new Image();
+        img.src = URL.createObjectURL(file);
+        img.onload = () => {
+            loadedImg = img;
+            view.rotation = 0;
+            if (img.height > img.width) setOrientation('portrait');
+            else setOrientation('landscape');
+            resetView(); draw();
+            
+            document.getElementById('cardUpload').classList.remove('step-disabled');
+            document.getElementById('cardUpload').classList.add('step-active');
+            document.getElementById('btnUpload').disabled = false;
+        };
+    };
+
+    function resetView() {
+        const scale = Math.max(canvasWidth / loadedImg.width, canvasHeight / loadedImg.height);
+        view.scale = scale;
+        view.x = (canvasWidth - loadedImg.width * scale) / 2;
+        view.y = (canvasHeight - loadedImg.height * scale) / 2;
+    }
+
+    function draw() {
+        if (!loadedImg) return;
+        ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+        ctx.save();
+        const imgCenterX = view.x + (loadedImg.width * view.scale) / 2;
+        const imgCenterY = view.y + (loadedImg.height * view.scale) / 2;
+        ctx.translate(imgCenterX, imgCenterY);
+        ctx.rotate(view.rotation * Math.PI / 180);
+        ctx.translate(-imgCenterX, -imgCenterY);
+        ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(loadedImg, view.x, view.y, loadedImg.width * view.scale, loadedImg.height * view.scale);
+        ctx.restore();
+    }
+
+    // --- TOUCH ---
+    const getTouchPos = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        return { x: (e.touches[0].clientX - rect.left) * (canvas.width/rect.width), y: (e.touches[0].clientY - rect.top) * (canvas.height/rect.height) };
+    }
+    const getDist = (e) => Math.sqrt((e.touches[0].clientX-e.touches[1].clientX)**2 + (e.touches[0].clientY-e.touches[1].clientY)**2);
+
+    canvas.addEventListener('touchstart', e => { isDragging=true; if(e.touches.length===2) lastDist=getDist(e); else lastPos=getTouchPos(e); }, {passive:false});
+    canvas.addEventListener('touchmove', e => {
+        if(!isDragging || !loadedImg) return; e.preventDefault();
+        if(e.touches.length===2) {
+            const dist = getDist(e); view.scale *= dist/lastDist; 
+            view.x = (canvasWidth/2) - ((canvasWidth/2)-view.x)*(dist/lastDist); 
+            view.y = (canvasHeight/2) - ((canvasHeight/2)-view.y)*(dist/lastDist);
+            lastDist = dist;
+        } else {
+            const curr = getTouchPos(e); view.x += curr.x-lastPos.x; view.y += curr.y-lastPos.y; lastPos = curr;
+        }
+        draw();
+    }, {passive:false});
+    canvas.addEventListener('touchend', () => isDragging=false);
+
+    // --- UPLOAD ---
+    document.getElementById('btnUpload').onclick = async () => {
+        const key = document.getElementById('apiKey').value;
+        const btn = document.getElementById('btnUpload'); btn.disabled = true;
+        
+        try {
+            // 1. Capture & FIX ORIENTATION
+            const cropCanvas = document.createElement('canvas'); 
+            cropCanvas.width = 800; 
+            cropCanvas.height = 480;
+            const hwCtx = cropCanvas.getContext('2d');
+            
+            // --- FIX FOR UPSIDE DOWN PORTRAIT ---
+            if(canvasWidth === 480) { 
+                // Rotate 90 degrees Clockwise (was -90 before)
+                hwCtx.translate(800, 0); 
+                hwCtx.rotate(90 * Math.PI / 180); 
+                hwCtx.drawImage(canvas, 0, 0); 
+            } else { 
+                // Landscape: No rotation needed
+                hwCtx.drawImage(canvas, 0, 0); 
+            }
+
+            // 2. AI
+            document.getElementById('statsBox').style.display = "block";
+            document.getElementById('statusText').innerText = "🤖 AI Processing...";
+            let regions = [];
+            if(key) {
+                try {
+                    const model = new GoogleGenerativeAI(key).getGenerativeModel({ model: "gemini-1.5-flash" });
+                    const b64 = cropCanvas.toDataURL("image/jpeg").split(',')[1];
+                    const res = await model.generateContent([`Analyze for 7-color e-ink. Return JSON: [{"label":"obj","box_2d":[ymin,xmin,ymax,xmax],"sharpness":2,"saturation":30}]`, { inlineData: { data: b64, mimeType: "image/jpeg" } }]);
+                    regions = JSON.parse(res.response.text().replace(/```json|```/g, '').trim());
+                } catch(e) { console.log("AI Skipped"); }
+            }
+
+            // 3. Render
+            document.getElementById('statusText').innerText = "🎨 Rendering...";
+            const finalBytes = processImage(cropCanvas, regions);
+
+            // 4. Upload
+            document.getElementById('statusText').innerText = "🚀 Uploading...";
+            document.getElementById('statSize').innerText = (finalBytes.length/1024).toFixed(1) + " KB";
+            
+            const startTime = Date.now();
+            await char.writeValue(new TextEncoder().encode("START"));
+            
+            const CHUNK = 512;
+            let offset = 0, packetCount = 0;
+            
+            while(offset < finalBytes.length) {
+                const end = Math.min(offset + CHUNK, finalBytes.length);
+                const chunk = finalBytes.slice(offset, end);
+                
+                // Burst 6:1 (Stable)
+                if (packetCount % 6 === 0) await char.writeValueWithResponse(chunk);
+                else await char.writeValueWithoutResponse(chunk);
+
+                offset += CHUNK;
+                packetCount++;
+
+                if (packetCount % 5 === 0) {
+                    const pct = Math.floor((offset / finalBytes.length) * 100);
+                    document.getElementById('progressBar').style.width = pct + "%";
+                    const elapsed = (Date.now() - startTime) / 1000;
+                    if(elapsed > 0.5) {
+                        const speed = (offset / 1024) / elapsed;
+                        const timeLeft = (finalBytes.length - offset) / 1024 / speed;
+                        document.getElementById('statSpeed').innerText = speed.toFixed(1) + " KB/s";
+                        document.getElementById('statTime').innerText = timeLeft.toFixed(0) + "s";
+                    }
+                }
+            }
+
+            try { await char.writeValue(new TextEncoder().encode("END")); } catch(e){}
+            document.getElementById('statusText').innerText = "✅ Done!";
+            document.getElementById('progressBar').style.width = "100%";
+            
+        } catch(e) { 
+            if (!e.message.includes("GATT")) {
+                alert("Error: " + e); 
+                document.getElementById('statusText').innerText = "Error"; 
+                btn.disabled = false;
+            }
+        }
+    };
+
+    function processImage(srcCv, regions) {
+        const tempCv = document.createElement('canvas'); tempCv.width = 800; tempCv.height = 480;
+        const ctx = tempCv.getContext('2d');
+        ctx.filter = `saturate(130%) contrast(130%) brightness(105%)`;
+        ctx.drawImage(srcCv, 0, 0);
+
+        regions.forEach(r => {
+            const y = (r.box_2d[0]/1000)*480, x = (r.box_2d[1]/1000)*800;
+            const h = ((r.box_2d[2]-r.box_2d[0])/1000)*480, w = ((r.box_2d[3]-r.box_2d[1])/1000)*800;
+            if(w<5 || h<5) return;
+            const id = ctx.getImageData(x,y,w,h);
+            const rCv = document.createElement('canvas'); rCv.width=w; rCv.height=h;
+            const rCtx = rCv.getContext('2d'); rCtx.putImageData(id,0,0);
+            rCtx.globalCompositeOperation="copy"; rCtx.filter = `saturate(${100+r.saturation}%)`; rCtx.drawImage(rCv,0,0);
+            ctx.drawImage(rCv,x,y);
+        });
+
+        const d = ctx.getImageData(0,0,800,480).data, b = new Uint8Array(800*480);
+        const P = [[0,0,0],[255,255,255],[0,255,0],[0,0,255],[255,0,0],[255,255,0],[255,165,0]];
+        for(let i=0; i<d.length; i+=4) {
+            const x = (i/4)%800, y = Math.floor((i/4)/800), old = [d[i], d[i+1], d[i+2]];
+            if (old[0]>235 && old[1]>235 && old[2]>235) { b[y*800+x]=1; d[i]=d[i+1]=d[i+2]=255; continue; }
+            let best=0, min=Infinity;
+            P.forEach((p, idx) => { const dist = Math.sqrt((old[0]-p[0])**2+(old[1]-p[1])**2+(old[2]-p[2])**2); if(dist<min){min=dist; best=idx;} });
+            const nu = P[best]; b[y*800+x]=best; d[i]=nu[0]; d[i+1]=nu[1]; d[i+2]=nu[2];
+            const err = [old[0]-nu[0], old[1]-nu[1], old[2]-nu[2]];
+            const push = (dx,dy,f) => {
+                const nx=x+dx, ny=y+dy; if(nx>=0 && nx<800 && ny<480) { const ni=(ny*800+nx)*4; d[ni]+=err[0]*f/16*0.7; d[ni+1]+=err[1]*f/16*0.7; d[ni+2]+=err[2]*f/16*0.7; }
+            }; push(1,0,7); push(-1,1,3); push(0,1,5); push(1,1,1);
+        }
+        return b;
+    }
+</script>
+</body>
+</html>
